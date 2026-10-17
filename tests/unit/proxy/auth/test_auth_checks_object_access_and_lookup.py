@@ -9243,6 +9243,47 @@ def _make_wildcard_access_group_router():
     )
 
 
+@pytest.mark.parametrize(
+    ("allowed_pattern", "model", "expect_to_work"),
+    [
+        ("anthropic/*[1m]", "anthropic/claude-sonnet-4-5[1m]", True),
+        ("anthropic/*[1m]", "anthropic/claude-sonnet-4-5", False),
+        ("openai/gpt-4.1*", "openai/gpt-4.1-mini", True),
+        ("openai/gpt-4.1*", "openai/gpt-4X1-mini", False),
+        ("bedrock/us.*", "bedrock/us.amazon.nova-micro-v1:0", True),
+        ("bedrock/us.*", "bedrock/usXamazon.nova-micro-v1:0", False),
+        ("cohere/command-r+*", "cohere/command-r+", True),
+        ("cohere/command-r+*", "cohere/command-rrrr-extra", False),
+    ],
+)
+def test_wildcard_allowlist_treats_metacharacters_as_literals(
+    allowed_pattern: str,
+    model: str,
+    expect_to_work: bool,
+) -> None:
+    """`*` is the only wildcard. Brackets, dots, and plus signs in the allowlist stay literal."""
+    from litellm.proxy.auth.auth_checks import can_object_call_model
+
+    if expect_to_work:
+        assert (
+            can_object_call_model(
+                model=model,
+                llm_router=None,
+                models=[allowed_pattern],
+                object_type="key",
+            )
+            is True
+        )
+        return
+    with pytest.raises(ProxyException):
+        can_object_call_model(
+            model=model,
+            llm_router=None,
+            models=[allowed_pattern],
+            object_type="key",
+        )
+
+
 def test_can_object_call_model_access_group_wildcard_accepts_bare_model_name():
     """
     Regression: a key holding only the access group name was denied for `gpt-4o`

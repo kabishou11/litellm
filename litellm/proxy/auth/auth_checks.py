@@ -7426,9 +7426,12 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
 
     Returns:
         bool: True if model matches the pattern, False otherwise
+
+    `*` is the only wildcard. Every other character, including `.`, `+`, and
+    `[]`, is matched literally.
     """
     if "*" in allowed_model_pattern:
-        pattern: Final = f"^{allowed_model_pattern.replace('*', '.*')}$"
+        pattern: Final = "^" + re.escape(allowed_model_pattern).replace(r"\*", ".*") + "$"
         return bool(re.match(pattern, model))
 
     return False
