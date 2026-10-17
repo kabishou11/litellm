@@ -2010,6 +2010,7 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
     prompt_tokens_details: PromptTokensDetailsResult = {
         "cache_hit_tokens": 0,
         "cache_hit_audio_tokens": 0,
+        "cache_hit_image_tokens": 0,
         "cache_creation_tokens": 0,
         "cache_creation_token_details": CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=100,
@@ -2754,6 +2755,7 @@ def test_billed_token_rates_follow_the_token_tier_the_breakdown_bills_at(monkeyp
         output_cost_per_token=3e-5,
         cache_read_input_token_cost=6e-7,
         cache_read_input_audio_token_cost=6e-7,
+        cache_read_input_image_token_cost=6e-7,
         cache_creation_input_token_cost=7.5e-6,
         cache_creation_input_token_cost_above_1hr=7.5e-6,
         output_cost_per_reasoning_token=3e-5,
@@ -3488,6 +3490,73 @@ def test_generic_cost_per_token_bills_nested_reasoning_once_beside_audio_output(
     assert completion_cost == pytest.approx(
         30 * info["output_cost_per_token"] + 70 * info["output_cost_per_audio_token"]
     )
+
+
+def test_cached_image_tokens_bill_at_the_image_cache_read_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cost map or model_info that sets cache_read_input_image_token_cost bills cached
+    image tokens at that rate. Cached text stays on the text cache-read rate. With no
+    image cache rate, cached image tokens stay on the text cache-read rate."""
+    uncached_text = 100
+    cached_text = 40
+    uncached_image = 200
+    cached_image = 300
+    input_rate = 4e-6
+    image_input_rate = 8e-6
+    text_cache_rate = 1e-6
+    image_cache_rate = 2e-6
+    usage = Usage(
+        prompt_tokens=uncached_text + cached_text + uncached_image + cached_image,
+        completion_tokens=0,
+        total_tokens=uncached_text + cached_text + uncached_image + cached_image,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=uncached_text + cached_text,
+            image_tokens=uncached_image + cached_image,
+            cached_tokens=cached_text + cached_image,
+            cached_tokens_details={"text_tokens": cached_text, "image_tokens": cached_image},
+        ),
+    )
+    priced: ModelInfo = {
+        "litellm_provider": "openai",
+        "mode": "realtime",
+        "input_cost_per_token": input_rate,
+        "input_cost_per_image_token": image_input_rate,
+        "cache_read_input_token_cost": text_cache_rate,
+        "cache_read_input_image_token_cost": image_cache_rate,
+        "output_cost_per_token": 3e-6,
+    }
+    fresh_image = uncached_text * input_rate + uncached_image * image_input_rate
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="synthetic-image-cache",
+        usage=usage,
+        custom_llm_provider="openai",
+        model_info=priced,
+    )
+    assert prompt_cost == pytest.approx(fresh_image + cached_text * text_cache_rate + cached_image * image_cache_rate)
+
+    monkeypatch.setitem(litellm.model_cost, "synthetic-image-cache", priced)
+    mapped_prompt_cost, _ = generic_cost_per_token(
+        model="synthetic-image-cache", usage=usage, custom_llm_provider="openai"
+    )
+    breakdown = get_token_type_cost_breakdown(model="synthetic-image-cache", custom_llm_provider="openai", usage=usage)
+    assert mapped_prompt_cost == pytest.approx(prompt_cost)
+    assert breakdown.cache_read_cost == pytest.approx(cached_text * text_cache_rate + cached_image * image_cache_rate)
+
+    without_image_rate: ModelInfo = {
+        "litellm_provider": "openai",
+        "mode": "realtime",
+        "input_cost_per_token": input_rate,
+        "input_cost_per_image_token": image_input_rate,
+        "cache_read_input_token_cost": text_cache_rate,
+        "output_cost_per_token": 3e-6,
+    }
+    prompt_cost_without_image_rate, _ = generic_cost_per_token(
+        model="synthetic-image-cache",
+        usage=usage,
+        custom_llm_provider="openai",
+        model_info=without_image_rate,
+    )
+    assert prompt_cost_without_image_rate == pytest.approx(fresh_image + (cached_text + cached_image) * text_cache_rate)
 
 
 def test_cached_audio_tokens_fall_back_to_cache_read_input_token_cost() -> None:
