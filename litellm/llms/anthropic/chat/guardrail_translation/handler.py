@@ -13,7 +13,7 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Iterable, Mapping, MutableSequence, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, filterfalse, repeat
@@ -24,7 +24,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, iter_items
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.adapters.transformation import (
@@ -88,6 +88,7 @@ if TYPE_CHECKING:
         ModifyResponseException,
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.utils import ProxyLogging
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
@@ -574,6 +575,45 @@ def _parse_sse_event(adapter: TypeAdapter[_SSEEventT], event_type: str, data_lin
     return None
 
 
+_ANTHROPIC_SSE_EVENT_TYPES: Final = frozenset(
+    {
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+        "ping",
+        "error",
+    }
+)
+
+
+def _complete_sse_frames(buffer: bytes) -> tuple[tuple[bytes, ...], bytes]:
+    if not buffer:
+        return (), b""
+    parts: Final = buffer.split(b"\n\n")
+    if buffer.endswith(b"\n\n"):
+        return tuple(frame + b"\n\n" for frame in parts if frame.strip()), b""
+    return tuple(frame + b"\n\n" for frame in parts[:-1] if frame.strip()), parts[-1]
+
+
+def _text_block_text(block: object) -> str | None:
+    fields: Final = as_str_mapping(block)
+    text: Final = None if fields is None else fields.get("text")
+    if fields is None or fields.get("type") != "text" or not isinstance(text, str):
+        return None
+    return text
+
+
+def _rewritten_assistant_text(processed: object) -> str | None:
+    message: Final = as_str_mapping(processed)
+    content: Final = as_object_list(None if message is None else message.get("content"))
+    if content is None:
+        return None
+    return "".join(text for block in content if (text := _text_block_text(block)) is not None)
+
+
 class AnthropicMessagesHandler(BaseTranslation):
     """Process Anthropic messages with guardrails.
 
@@ -587,6 +627,111 @@ class AnthropicMessagesHandler(BaseTranslation):
     def __init__(self):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
+
+    @staticmethod
+    def is_event_stream_content_type(content_type: str) -> bool:
+        return "text/event-stream" in content_type
+
+    @staticmethod
+    def event_stream_media_type() -> str:
+        return "text/event-stream"
+
+    @staticmethod
+    def _is_messages_event_stream_endpoint(endpoint: str) -> bool:
+        path: Final = endpoint.rstrip("/").split("?")[0]
+        return path == "messages" or path.endswith("/messages")
+
+    @staticmethod
+    def event_stream_endpoint_is_de_anonymizable(endpoint: str, model: str, body: object) -> bool:
+        return AnthropicMessagesHandler._is_messages_event_stream_endpoint(endpoint)
+
+    @staticmethod
+    def event_stream_endpoint_is_relayable(endpoint: str, model: str, body: object) -> bool:
+        return AnthropicMessagesHandler._is_messages_event_stream_endpoint(endpoint)
+
+    @staticmethod
+    def owns_event_stream_item(item: object) -> bool:
+        if isinstance(item, (bytes, bytearray)):
+            sample: Final = bytes(item[:64]).lstrip().lower()
+            return sample.startswith((b"event:", b"data:"))
+        fields: Final = as_str_mapping(item)
+        return fields is not None and fields.get("type") in _ANTHROPIC_SSE_EVENT_TYPES
+
+    @staticmethod
+    async def event_stream_items(chunks: AsyncIterable[bytes], endpoint: str) -> AsyncIterator[object]:
+        if not AnthropicMessagesHandler._is_messages_event_stream_endpoint(endpoint):
+            return
+        pending = b""  # rebind-ok: bytes received but not yet a complete SSE frame
+        async for chunk in chunks:
+            frames, pending = _complete_sse_frames(pending + chunk)
+            for frame in frames:
+                yield frame
+        if pending.strip():
+            yield pending
+
+    @staticmethod
+    def encode_event_stream_item(item: object) -> bytes:
+        if isinstance(item, (bytes, bytearray)):
+            return bytes(item)
+        fields: Final = as_str_mapping(item)
+        if fields is not None:
+            event_type: Final = fields.get("type")
+            event_name: Final = event_type if isinstance(event_type, str) else "message"
+            return f"event: {event_name}\ndata: {json.dumps(dict(fields))}\n\n".encode()
+        raise TypeError(f"unsupported anthropic event-stream item: {type(item)!r}")
+
+    @staticmethod
+    def event_stream_error_item(message: str, status_code: int) -> bytes | None:
+        from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
+
+        frames: Final = anthropic_sse_error_frames(message)
+        return b"".join(frames) if frames else None
+
+    @staticmethod
+    async def de_anonymize_event_stream(
+        body_bytes: bytes,
+        proxy_logging_obj: "ProxyLogging",
+        user_api_key_dict: "UserAPIKeyAuth",
+        data: dict[str, object],  # mutable-ok: the request dict post_call hooks receive
+    ) -> bytes:
+        """Buffer the Anthropic SSE body, run post-call guardrails, rewrite text_delta frames.
+
+        Placeholders routinely split across multiple text_delta events, so the rewrite
+        lands the full unmasked text on the first text_delta and blanks the rest
+        (same strategy as the non-passthrough Anthropic streaming path).
+        """
+        handler: Final = AnthropicMessagesHandler()
+        responses_so_far: Final[list[object]] = [body_bytes]  # mutable-ok: ended-stream rewrite lands on these bytes
+        original_text: Final = handler.get_streaming_string_so_far(responses_so_far)
+        if not original_text:
+            return body_bytes
+
+        synthetic_response: Final[dict[str, object]] = {  # mutable-ok: the synthetic message post_call hooks receive
+            "id": "msg_passthrough_stream",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": original_text}],
+            "model": str(data.get("model") or ""),
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+
+        processed: Final = await proxy_logging_obj.post_call_success_hook(  # pyright: ignore[reportUnknownMemberType]  # ProxyLogging hook is untyped at this boundary
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=synthetic_response,  # pyright: ignore[reportArgumentType]  # synthetic Anthropic message dict, same as the Bedrock buffered path
+        )
+        rewritten_text: Final = _rewritten_assistant_text(processed)
+        if rewritten_text is None or rewritten_text == original_text:
+            return body_bytes
+
+        handler._write_ended_stream_text_rewrite(
+            responses_so_far,
+            rewritten_text,
+            guardrail_name="anthropic_passthrough",
+        )
+        rewritten: Final = responses_so_far[0]
+        return bytes(rewritten) if isinstance(rewritten, (bytes, bytearray)) else body_bytes
 
     def post_call_hook_response(self, response: object) -> object:
         if not isinstance(response, ModelResponse):

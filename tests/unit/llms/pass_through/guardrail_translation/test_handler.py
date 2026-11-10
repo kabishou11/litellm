@@ -1,5 +1,6 @@
 import json
 from typing import Final, Literal
+from unittest.mock import MagicMock
 
 import pytest
 from typing_extensions import ReadOnly, TypedDict
@@ -165,6 +166,9 @@ def _invoke_frame(event: _TextDeltaEvent) -> bytes:
         ("bedrock", _INVOKE_STREAM, None, {"anthropic_version": "bedrock-2023-05-31"}, True),
         ("bedrock", None, "anthropic.claude-sonnet-5-v1:0", None, False),
         ("vertex_ai", "model/x/converse-stream", "anthropic.claude-sonnet-5-v1:0", None, False),
+        ("anthropic", "/v1/messages", "claude-haiku-4-5", {"stream": True}, True),
+        ("anthropic", "v1/messages", "claude-haiku-4-5", None, True),
+        ("anthropic", "/v1/complete", "claude-haiku-4-5", None, False),
     ],
 )
 def test_passthrough_route_relays_and_buffers_the_streams_its_provider_translation_scans(
@@ -226,3 +230,52 @@ def test_passthrough_route_block_before_any_invoke_frame_is_a_whole_message_in_c
         "message_stop",
     ]
     assert events[2]["delta"]["text"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_passthrough_supports_messages_stream_de_anonymization():
+    from litellm.llms.pass_through.guardrail_translation.handler import LlmPassthroughRouteHandler
+
+    assert (
+        LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+            "anthropic", "/v1/messages", "claude-haiku-4-5", {"stream": True}
+        )
+        is True
+    )
+    assert (
+        LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+            "anthropic", "/v1/complete", "claude-haiku-4-5", {"stream": True}
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_de_anonymize_event_stream_rewrites_split_text_deltas():
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    body: Final = (
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"My colleague <PER"}}\n\n'
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"SON_1> ships software."}}\n\n'
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":8}}\n\n'
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    )
+
+    async def restore_name(data: object, user_api_key_dict: object, response: object) -> object:
+        assert isinstance(response, dict)
+        content: Final = response["content"]
+        assert content[0]["text"] == "My colleague <PERSON_1> ships software."
+        content[0]["text"] = "My colleague John Smith ships software."
+        return response
+
+    rewritten: Final = await AnthropicMessagesHandler.de_anonymize_event_stream(
+        body_bytes=body,
+        proxy_logging_obj=MagicMock(post_call_success_hook=restore_name),
+        user_api_key_dict=UserAPIKeyAuth(),
+        data={"model": "claude-haiku-4-5", "custom_llm_provider": "anthropic", "endpoint": "/v1/messages"},
+    )
+    assert b"John Smith" in rewritten
+    assert b"<PERSON_1>" not in rewritten
+    assert rewritten.count(b"My colleague John Smith ships software.") == 1
+    assert b'"text": "My colleague John Smith ships software."' in rewritten
