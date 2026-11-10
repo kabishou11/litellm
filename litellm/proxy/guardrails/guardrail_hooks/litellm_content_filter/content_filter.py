@@ -759,10 +759,12 @@ class ContentFilterGuardrail(CustomGuardrail):
             if category_config_obj.additional_block_words:
                 block_words.extend(category_config_obj.additional_block_words)
 
-            # Store the conditional category configuration
+            # Store the conditional category configuration.
+            # Freeze word lists as tuples so request-time matching cannot mutate
+            # shared category state and leak a prior match into later requests.
             self.conditional_categories[category_name] = {
-                "identifier_words": category_config_obj.identifier_words,
-                "block_words": block_words,
+                "identifier_words": tuple(category_config_obj.identifier_words),
+                "block_words": tuple(block_words),
                 "action": category_action,
                 "severity": "high",  # Combinations are always high severity
             }
