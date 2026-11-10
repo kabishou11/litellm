@@ -115,6 +115,16 @@ class PrismaDBExceptionHandler:
     """
 
     @staticmethod
+    def _database_was_configured() -> bool:
+        """True when the process was started with a database URL (even if connect failed)."""
+        from litellm.proxy.proxy_server import general_settings_view
+        from litellm.secret_managers.main import get_secret_str
+
+        if general_settings_view().get("database_url"):
+            return True
+        return get_secret_str("DATABASE_URL") is not None
+
+    @staticmethod
     def should_allow_request_on_db_unavailable() -> bool:
         """
         Returns True if the request should be allowed to proceed despite the DB connection error
@@ -147,9 +157,21 @@ class PrismaDBExceptionHandler:
         unreachable database surfaces as a transport error against it rather
         than as a prisma type.
 
+        An initial Prisma connect failure leaves ``prisma_client=None`` and
+        IdentityStore raises ``NoDatabaseConnectionError``. That is treated as
+        a connectivity outage only when a database URL was configured, so a
+        deliberate DB-less deployment does not fail-open as "db down". The
+        check runs before importing prisma so proxy installs without prisma
+        still work.
+
         Reporting decisions want the opposite breadth; use
         ``is_database_infrastructure_error`` for those.
         """
+        from litellm.proxy.auth.resolvers.exceptions import NoDatabaseConnectionError
+
+        if isinstance(e, NoDatabaseConnectionError) and PrismaDBExceptionHandler._database_was_configured():
+            return True
+
         import prisma.engine.errors
 
         if isinstance(e, (*DB_CONNECTION_ERROR_TYPES, DBLookupDeadlineExceeded)):
