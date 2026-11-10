@@ -818,3 +818,57 @@ async def test_dashboard_lists_not_asking_for_allowlist_names_offer_no_typesafe_
     )
 
     assert {model["id"] for model in response["data"]}.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [None, "expand"])
+async def test_model_list_owned_by_is_the_configured_provider(
+    monkeypatch: pytest.MonkeyPatch, scope: str | None
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "hosted-azure",
+                "litellm_params": {
+                    "model": "azure/deployment-model",
+                    "api_key": "sk-fake",
+                    "api_base": "https://provider.example.com",
+                },
+            },
+            {
+                "model_name": "hosted-anthropic",
+                "litellm_params": {"model": "anthropic/deployment-model", "api_key": "sk-fake"},
+            },
+            {
+                "model_name": "hosted-openai",
+                "litellm_params": {"model": "openai/deployment-model", "api_key": "sk-fake"},
+            },
+            {
+                "model_name": "hosted-bedrock",
+                "litellm_params": {
+                    "model": "us.anthropic.deployment-model",
+                    "custom_llm_provider": "bedrock",
+                    "api_key": "sk-fake",
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.registry().all())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    listing: Final = await proxy_server.model_list(user_api_key_dict=caller, scope=scope)
+
+    owners: Final = {row["id"]: row["owned_by"] for row in listing["data"]}
+    assert owners == {
+        "hosted-azure": "azure",
+        "hosted-anthropic": "anthropic",
+        "hosted-openai": "openai",
+        "hosted-bedrock": "bedrock",
+    }
+    for model_id, owned_by in owners.items():
+        retrieved: Final = await proxy_server.model_info(model_id=model_id, user_api_key_dict=caller)
+        assert retrieved["owned_by"] == owned_by

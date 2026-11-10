@@ -12747,6 +12747,13 @@ class _KeyModelListing:
     labels: tuple[tuple[str, str], ...]
 
 
+def _listed_model_provider(lookup_id: str) -> str:
+    if llm_router is None:
+        return "openai"
+    provider: Final = llm_router.registry().resolve(lookup_id, kind="upstream_provider")
+    return provider if isinstance(provider, str) and provider else "openai"
+
+
 def _listed_model_info(
     response_id: str, lookup_id: str, include_metadata: bool, fallback_type: str | None
 ) -> "ModelInfoResponse":
@@ -12754,7 +12761,7 @@ def _listed_model_info(
 
     model_info: Final = create_model_info_response(
         model_id=lookup_id,
-        provider="openai",
+        provider=_listed_model_provider(lookup_id),
         include_metadata=include_metadata,
         fallback_type=fallback_type,
         llm_router=llm_router,
@@ -12894,8 +12901,6 @@ async def model_list(
     from litellm.proxy.management_endpoints.common_utils import (
         user_has_admin_privileges,
     )
-    from litellm.proxy.utils import create_model_info_response
-    from litellm.types.proxy.model_listing import ModelInfoResponse
 
     http_request: Final = cast(Request | None, request)  # cast-ok: in-process callers pass no request
     wants_anthropic_format: Final = (
@@ -12981,22 +12986,13 @@ async def model_list(
         # Surface the public team name by default; legacy internal keys via flag.
         # The internal routing key drives the metadata/fallback lookup, while the
         # public name is what the client sees as the model id.
-        model_data = []
         admin_entries: Final = await _entries_kept_by_listing_callbacks(
             TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
         )
-        for response_id, lookup_id in admin_entries:
-            model_info = create_model_info_response(
-                model_id=lookup_id,
-                provider="openai",
-                include_metadata=include_metadata or False,
-                fallback_type=fallback_type,
-                llm_router=llm_router,
-            )
-            model_info["id"] = response_id
-            model_data.append(model_info)
-
-        admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
+        admin_listing: Final = [
+            _listed_model_info(response_id, lookup_id, include_metadata or False, fallback_type)
+            for response_id, lookup_id in admin_entries
+        ]
         if client_version is not None:
             admin_codex_stock: Final = await codex_catalog_source.stock(client_version)
             return Response(
@@ -13025,7 +13021,7 @@ async def model_list(
             )
 
         return dict(
-            data=model_data,
+            data=admin_listing,
             object="list",
         )
 
@@ -13195,12 +13191,9 @@ async def model_info(
             detail=f"Model '{model_id}' not found in router configuration",
         )
 
-    # Use the actual litellm model from the deployment to get provider info
-    _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
-
     response: Final = create_model_info_response(
         model_id=resolved_model_id,
-        provider=provider,
+        provider=_listed_model_provider(resolved_model_id),
         include_metadata=False,
         fallback_type=None,
         llm_router=llm_router,
