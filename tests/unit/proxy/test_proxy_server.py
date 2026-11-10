@@ -487,7 +487,7 @@ def test_chat_completion(mock_acompletion, client_no_auth):
     try:
         # Your test data
         test_data = {
-            "model": "gpt-3.5-turbo",
+            "model": "test_openai_models",
             "messages": [
                 {"role": "user", "content": "hi"},
             ],
@@ -497,7 +497,7 @@ def test_chat_completion(mock_acompletion, client_no_auth):
         print("testing proxy server with chat completions")
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
         mock_acompletion.assert_called_once_with(
-            model="gpt-3.5-turbo",
+            model="test_openai_models",
             messages=[
                 {"role": "user", "content": "hi"},
             ],
@@ -505,7 +505,6 @@ def test_chat_completion(mock_acompletion, client_no_auth):
             litellm_call_id=mock.ANY,
             litellm_logging_obj=mock.ANY,
             request_timeout=mock.ANY,
-            specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
@@ -530,7 +529,7 @@ def test_chat_completion_malformed_messages_returns_400(client_no_auth):
     try:
         # Test data with malformed messages (string instead of dict)
         test_data = {
-            "model": "gpt-3.5-turbo",
+            "model": "test_openai_models",
             "messages": [
                 "hi how are you"
             ],  # Invalid: should be [{"role": "user", "content": "hi how are you"}]
@@ -646,7 +645,7 @@ def test_chat_completion_forward_headers(
             setattr(litellm.proxy.proxy_server, "general_settings", gs)
         # Your test data
         test_data = {
-            "model": "gpt-3.5-turbo",
+            "model": "test_openai_models",
             "messages": [
                 {"role": "user", "content": "hi"},
             ],
@@ -705,7 +704,7 @@ def test_chat_completion_forward_llm_provider_auth_headers(
 
         # Test data
         test_data = {
-            "model": "gpt-3.5-turbo",
+            "model": "test_openai_models",
             "messages": [
                 {"role": "user", "content": "hello"},
             ],
@@ -888,7 +887,7 @@ def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
     try:
         # Your test data
         test_data = {
-            "model": "gpt-3.5-turbo",
+            "model": "test_openai_models",
             "messages": [
                 {"role": "user", "content": "hi"},
             ],
@@ -897,10 +896,10 @@ def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
 
         print("testing proxy server with chat completions")
         response = client_no_auth.post(
-            "/engines/gpt-3.5-turbo/chat/completions", json=test_data
+            "/engines/test_openai_models/chat/completions", json=test_data
         )
         mock_acompletion.assert_called_once_with(
-            model="gpt-3.5-turbo",
+            model="test_openai_models",
             messages=[
                 {"role": "user", "content": "hi"},
             ],
@@ -908,7 +907,6 @@ def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
             litellm_call_id=mock.ANY,
             litellm_logging_obj=mock.ANY,
             request_timeout=mock.ANY,
-            specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
@@ -927,7 +925,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
     try:
         # Your test data
         test_data = {
-            "model": "azure/gpt-4.1-mini",
+            "model": "azure-cloudflare-model",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -938,7 +936,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
 
         mock_acompletion.assert_called_once_with(
-            model="azure/gpt-4.1-mini",
+            model="azure-cloudflare-model",
             messages=[
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -946,7 +944,6 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
             litellm_call_id=mock.ANY,
             litellm_logging_obj=mock.ANY,
             request_timeout=mock.ANY,
-            specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
@@ -971,19 +968,19 @@ def test_openai_deployments_model_chat_completions_azure(
     try:
         # Your test data
         test_data = {
-            "model": "azure/gpt-4.1-mini",
+            "model": "azure-cloudflare-model",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
             "max_tokens": 10,
         }
 
-        url = "/openai/deployments/azure/gpt-4.1-mini/chat/completions"
+        url = "/openai/deployments/azure-cloudflare-model/chat/completions"
         print(f"testing proxy server with Azure Request {url}")
         response = client_no_auth.post(url, json=test_data)
 
         mock_acompletion.assert_called_once_with(
-            model="azure/gpt-4.1-mini",
+            model="azure-cloudflare-model",
             messages=[
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -991,7 +988,6 @@ def test_openai_deployments_model_chat_completions_azure(
             litellm_call_id=mock.ANY,
             litellm_logging_obj=mock.ANY,
             request_timeout=mock.ANY,
-            specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
@@ -1016,7 +1012,7 @@ def test_embedding(mock_aembedding, client_no_auth):
 
     try:
         test_data = {
-            "model": "azure/text-embedding-ada-002",
+            "model": "azure-embedding-model",
             "input": ["good morning from litellm"],
         }
 
@@ -1052,9 +1048,8 @@ def test_embedding(mock_aembedding, client_no_auth):
             response = client_no_auth.post("/v1/embeddings", json=test_data)
 
         mock_aembedding.assert_called_once_with(
-            model="azure/text-embedding-ada-002",
+            model="azure-embedding-model",
             input=["good morning from litellm"],
-            specific_deployment=True,
             litellm_call_id=mock.ANY,
             litellm_logging_obj=mock.ANY,
             request_timeout=mock.ANY,
@@ -1226,7 +1221,7 @@ class MyCustomHandler(CustomLogger):
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Success")
         assert kwargs["user"] == "proxy-user"
-        assert kwargs["model"] == "gpt-3.5-turbo"
+        assert kwargs["model"] == "test_openai_models"
         assert kwargs["max_tokens"] == 10
 
 
@@ -1241,7 +1236,7 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
         # Your test data
         litellm.set_verbose = True
         test_data = {
-            "model": "gpt-3.5-turbo",
+            "model": "test_openai_models",
             "messages": [
                 {"role": "user", "content": "hi"},
             ],
@@ -1253,7 +1248,7 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
         print("testing proxy server: optional params")
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
         mock_acompletion.assert_called_once_with(
-            model="gpt-3.5-turbo",
+            model="test_openai_models",
             messages=[
                 {"role": "user", "content": "hi"},
             ],
@@ -1262,7 +1257,6 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
             litellm_call_id=mock.ANY,
             litellm_logging_obj=mock.ANY,
             request_timeout=mock.ANY,
-            specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,

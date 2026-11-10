@@ -978,8 +978,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] not in router_model_names:
-            # Check wildcards before checking deployment_names
-            # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.settings().router_general_settings.pass_through_all_models:
                 return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
             elif (
@@ -987,9 +985,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 or len(llm_router.registry().patterns().patterns) > 0
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
-            elif data["model"] in llm_router.registry().names(kind="deployment_names"):
-                # Only match deployment_names if no wildcard matched
-                return getattr(llm_router, f"{route_type}")(**data, specific_deployment=True)
             elif route_type in [
                 "amoderation",
                 "aget_responses",

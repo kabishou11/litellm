@@ -2079,6 +2079,42 @@ async def test_route_request_unknown_model_raises_and_hits_db_once_within_ttl(mo
 
 
 @pytest.mark.asyncio
+async def test_route_request_rejects_provider_type_when_only_the_alias_is_listed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "foo",
+                "litellm_params": {"model": "gpt-4.1", "api_key": "fake", "mock_response": "alias-ok"},
+            }
+        ]
+    )
+    listed: Final = await route_request(
+        data={"model": "foo", "messages": [{"role": "user", "content": "Hi."}]},
+        llm_router=router,
+        user_model=None,
+        route_type="acompletion",
+    )
+    listed_response: Final = await listed
+
+    assert listed_response.choices[0].message.content == "alias-ok"
+
+    with pytest.raises(ProxyModelNotFoundError) as exc_info:
+        await route_request(
+            data={"model": "gpt-4.1", "messages": [{"role": "user", "content": "Hi."}]},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+
+    assert "gpt-4.1" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
 async def test_route_request_read_through_disabled_without_store_model_in_db(monkeypatch):
     import litellm
     import litellm.proxy.proxy_server as proxy_server
