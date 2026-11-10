@@ -116,9 +116,11 @@ def _raise_callback_load_error(error: _CallbackLoadError) -> NoReturn:
             raise ValueError(
                 f"litellm_settings.callbacks entry '{error.entry}' resolved to the class "
                 f"{error.loaded.__module__}.{error.loaded.__qualname__}, which is neither a "
-                "CustomLogger instance nor a callable, so the proxy would never run it."
-                f" Point it at an instance instead, e.g. add `proxy_handler_instance = {error.loaded.__name__}()` to "
-                f'{module_path} and set `callbacks: ["{module_path}.proxy_handler_instance"]`.'
+                "CustomLogger instance nor a callable, so the proxy would never run it. "
+                f"Point it at an instance instead, e.g. add `proxy_handler_instance = {error.loaded.__name__}()` to "
+                f'{module_path} and set `callbacks: ["{module_path}.proxy_handler_instance"]`. '
+                "Custom guardrails are the other way around. They take the class under `guardrails`, "
+                f"e.g. `litellm_params.guardrail: {error.entry}`."
             )
         case _CallbackNotDispatchable():
             raise ValueError(

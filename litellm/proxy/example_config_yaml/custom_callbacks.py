@@ -71,6 +71,7 @@ class MyCustomHandler(CustomLogger):
 proxy_handler_instance: Final = MyCustomHandler()
 
 
-# need to set litellm.callbacks = [customHandler] # on the proxy
+# config.yaml: litellm_settings.callbacks: custom_callbacks.proxy_handler_instance
+# (the instance, not MyCustomHandler). Custom guardrails take the class instead.
 
 # litellm.success_callback = [async_on_succes_logger]

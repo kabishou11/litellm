@@ -1,9 +1,7 @@
 import json
 from typing import Final, Literal
-from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
@@ -428,6 +426,98 @@ def test_init_guardrails_v2_stops_boot_when_a_custom_code_guardrail_does_not_com
 
     with pytest.raises(CustomCodeCompilationError, match="apply_guardrail"):
         init_guardrails_v2(all_guardrails=all_guardrails)
+
+
+_GUARDRAIL_PROBE_MODULE: Final = "custom_guardrail_probe"
+
+_GUARDRAIL_PROBE_SOURCE: Final = """
+from litellm.integrations.custom_guardrail import CustomGuardrail
+
+
+class FloorMaxTokens(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        data["max_tokens"] = 16
+        return data
+
+
+proxy_handler_instance = FloorMaxTokens()
+"""
+
+
+@pytest.fixture
+def guardrail_probe_config_path(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    import litellm
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    (tmp_path / f"{_GUARDRAIL_PROBE_MODULE}.py").write_text(_GUARDRAIL_PROBE_SOURCE)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+    try:
+        yield str(tmp_path / "config.yaml")
+    finally:
+        IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+        IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+
+def test_init_guardrails_v2_stops_boot_when_custom_guardrail_path_names_an_instance(
+    guardrail_probe_config_path: str,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_registry import (
+        IN_MEMORY_GUARDRAIL_HANDLER,
+        GuardrailClassPathError,
+    )
+
+    entry: Final = f"{_GUARDRAIL_PROBE_MODULE}.proxy_handler_instance"
+
+    with pytest.raises(GuardrailClassPathError, match="resolved to an instance") as exc_info:
+        init_guardrails_v2(
+            all_guardrails=[
+                {
+                    "guardrail_name": "instance-path-guard",
+                    "litellm_params": {"guardrail": entry, "mode": "pre_call"},
+                }
+            ],
+            config_file_path=guardrail_probe_config_path,
+        )
+
+    message: Final = str(exc_info.value)
+    assert entry in message
+    assert f"{_GUARDRAIL_PROBE_MODULE}.FloorMaxTokens" in message
+    assert "mode: pre_call" in message
+    assert f'callbacks: ["{_GUARDRAIL_PROBE_MODULE}.proxy_handler_instance"]' in message
+    assert IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS == {}
+
+
+def test_init_guardrails_v2_loads_a_custom_guardrail_class_path(guardrail_probe_config_path: str) -> None:
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "class-path-guard",
+                "litellm_params": {
+                    "guardrail": f"{_GUARDRAIL_PROBE_MODULE}.FloorMaxTokens",
+                    "mode": "pre_call",
+                },
+            }
+        ],
+        config_file_path=guardrail_probe_config_path,
+    )
+
+    names: Final = {
+        guardrail["guardrail_name"] for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    }
+    assert names == {"class-path-guard"}
+    registered: Final = tuple(
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, CustomGuardrail) and getattr(callback, "guardrail_name", None) == "class-path-guard"
+    )
+    assert len(registered) == 1
+    assert registered[0].__class__.__name__ == "FloorMaxTokens"
 
 
 def test_init_guardrails_v2_accepts_during_call_advisory_mode():

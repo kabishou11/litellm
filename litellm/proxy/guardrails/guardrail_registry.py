@@ -87,6 +87,7 @@ def _guardrail_table(prisma_client: PrismaClient) -> "TableActions[prisma_models
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_ARRAY: Final = TypeAdapter(list[object])
+_LOADED_OBJECT: Final = TypeAdapter(object)
 
 
 def _as_json_object(value: object) -> dict[str, object] | None:
@@ -586,6 +587,41 @@ def _as_callback_tuple(
     return (initialized,)
 
 
+class GuardrailClassPathError(Exception):
+    """Raised when a custom guardrail dotted path names an instance rather than a class.
+
+    Deliberately not a ValueError. init_guardrails_v2 skips ValueError/TypeError so one
+    bad row cannot take down the proxy. Pointing guardrails at the callbacks instance
+    shape would otherwise boot without the guardrail. This error must stop startup.
+    """
+
+
+def _guardrail_instance_path_error(entry: str, loaded: object) -> str:
+    loaded_type: Final = type(loaded)
+    module_path: Final = entry.rsplit(".", 1)[0] if "." in entry else entry
+    class_name: Final = loaded_type.__name__
+    return (
+        f"guardrails litellm_params.guardrail '{entry}' resolved to an instance of "
+        f"{loaded_type.__module__}.{loaded_type.__qualname__}, not a class. "
+        "Custom guardrails take the class so the proxy can construct it with "
+        "guardrail_name, mode, and extra params. "
+        f"Set `guardrail: {module_path}.{class_name}` under `guardrails`, for example\n"
+        "guardrails:\n"
+        "  - guardrail_name: my-guard\n"
+        "    litellm_params:\n"
+        f"      guardrail: {module_path}.{class_name}\n"
+        "      mode: pre_call\n"
+        "Logging callbacks are the other way around. They take an instance under "
+        f'`litellm_settings.callbacks`, for example `callbacks: ["{module_path}.proxy_handler_instance"]`.'
+    )
+
+
+def _loaded_guardrail_class_or_raise(entry: str, loaded: object) -> Callable[..., CustomGuardrail]:
+    if isinstance(loaded, type):
+        return loaded
+    raise GuardrailClassPathError(_guardrail_instance_path_error(entry, loaded))
+
+
 def _logging_only_scope_error(
     custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
 ) -> str | None:
@@ -901,8 +937,9 @@ class InMemoryGuardrailHandler:
             guardrail_type,
         )
 
-        _guardrail_class: Final[Callable[..., CustomGuardrail]] = get_instance_fn(
-            guardrail_type, config_file_path=config_file_path
+        _guardrail_class: Final[Callable[..., CustomGuardrail]] = _loaded_guardrail_class_or_raise(
+            guardrail_type,
+            _LOADED_OBJECT.validate_python(get_instance_fn(guardrail_type, config_file_path=config_file_path)),
         )
 
         mode: Final = litellm_params.mode

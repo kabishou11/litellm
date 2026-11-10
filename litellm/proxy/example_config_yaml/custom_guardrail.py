@@ -7,6 +7,9 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import CallTypesLiteral
 
+# config.yaml: guardrails[].litellm_params.guardrail: custom_guardrail.myCustomGuardrail
+# (the class, not an instance). Logging callbacks take an instance instead.
+
 # Global counter for tracking which guardrail was called (for load balancing tests)
 guardrail_lb_call_count: Final[Dict[str, int]] = {"A": 0, "B": 0}
 

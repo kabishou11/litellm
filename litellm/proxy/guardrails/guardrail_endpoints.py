@@ -36,6 +36,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     compile_sandboxed,
 )
 from litellm.proxy.guardrails.guardrail_registry import (
+    GuardrailClassPathError,
     GuardrailRegistry,
     configured_event_hooks,
     contains_encrypted_marker,
@@ -460,7 +461,7 @@ async def create_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
-        except (ValueError, TypeError, CustomCodeCompilationError) as init_error:
+        except (ValueError, TypeError, CustomCodeCompilationError, GuardrailClassPathError) as init_error:
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
@@ -588,7 +589,7 @@ async def update_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
-        except (ValueError, TypeError) as update_error:
+        except (ValueError, TypeError, GuardrailClassPathError) as update_error:
             # The new config is invalid (a raising guardrail __init__):
             # reinitialize_guardrail already restored the previous live instance, but
             # update_guardrail_in_db above already persisted the rejected config to
@@ -1354,7 +1355,7 @@ async def patch_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
-        except (ValueError, TypeError) as update_error:
+        except (ValueError, TypeError, GuardrailClassPathError) as update_error:
             # The new config is invalid (e.g. an unsupported on_flagged combination):
             # reinitialize_guardrail already restored the previous live instance, but
             # update_guardrail_in_db above already persisted the rejected config to

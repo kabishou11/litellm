@@ -698,6 +698,7 @@ def test_initialize_callbacks_on_proxy_rejects_class_valued_entry(probe_config_p
     assert "the class" in message
     assert "FloorMaxTokens" in message
     assert f"{_PROBE_MODULE_NAME}.proxy_handler_instance" in message
+    assert "litellm_params.guardrail" in message
     assert litellm.callbacks == []
 
 
