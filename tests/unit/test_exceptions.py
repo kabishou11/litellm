@@ -30,3 +30,16 @@ def test_rejected_request_error_keeps_existing_metadata_keys():
         "user_api_key": "sk-test",
         "rejected_by_hook": "custom_hook",
     }
+
+
+def test_rejected_request_error_replaces_non_dict_metadata():
+    request_data: Final = {"model": "m", "metadata": None}
+    err: Final = RejectedRequestError(
+        message="blocked",
+        model="m",
+        llm_provider="",
+        request_data=request_data,
+    )
+    assert err.rejected_by_hook == "pre_call_hook"
+    assert request_data["metadata"] == {"rejected_by_hook": "pre_call_hook"}
+    assert err.request_data is request_data
