@@ -137,7 +137,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.llms.xai import RealtimeMeteredUsage
-from litellm.types.rerank import RerankBilledUnits, RerankResponse
+from litellm.types.rerank import RerankBilledUnits, RerankResponse, RerankResponseUsage
 from litellm.types.utils import (
     CallTypesLiteral,
     LiteLLMRealtimeStreamLoggingObject,
@@ -2109,19 +2109,8 @@ def completion_cost(
                     audio_transcription_file_duration = _transcription_duration_for_cost(completion_response)
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
-                        meta_obj = completion_response.meta
-                        if meta_obj is not None:
-                            billed_units: RerankBilledUnits = meta_obj.get("billed_units") or {}
-                        else:
-                            billed_units = {}
-
-                        rerank_billed_units = RerankBilledUnits(
-                            search_units=billed_units.get("search_units"),
-                            total_tokens=billed_units.get("total_tokens"),
-                        )
-
-                        search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
-                        completion_tokens = search_units
+                        rerank_billed_units = _rerank_billed_units(completion_response)
+                        completion_tokens = rerank_billed_units.get("search_units") or 1
                 elif call_type in _SEARCH_CALL_TYPES:
                     from litellm.search import search_provider_cost_per_query
 
@@ -2471,6 +2460,50 @@ def _billable_header_cost(value: object) -> float | None:
     return cost if math.isfinite(cost) and cost >= 0 else None
 
 
+_RERANK_RATE_FIELDS: Final = frozenset({"input_cost_per_query", "input_cost_per_token"})
+
+
+def _first_int(*values: object) -> int | None:
+    return next((value for value in values if isinstance(value, int) and not isinstance(value, bool)), None)
+
+
+def _rerank_billed_units(response: RerankResponse) -> RerankBilledUnits:
+    meta: Final = response.meta
+    billed: Final = (meta.get("billed_units") if meta is not None else None) or RerankBilledUnits()
+    usage: Final = response.usage or RerankResponseUsage()
+    return RerankBilledUnits(
+        search_units=_first_int(billed.get("search_units"), usage.get("search_units")),
+        total_tokens=_first_int(billed.get("total_tokens"), usage.get("total_tokens")),
+        input_tokens=_first_int(billed.get("input_tokens"), usage.get("input_tokens")),
+        output_tokens=_first_int(billed.get("output_tokens"), usage.get("output_tokens")),
+    )
+
+
+def _rerank_rates_present(info: Mapping[str, object]) -> bool:
+    return any(info.get(field) is not None for field in _RERANK_RATE_FIELDS)
+
+
+def _rerank_catalog_entry_declares_price(entry: Mapping[str, object] | None) -> bool:
+    return entry is not None and entry.get("mode") == "rerank" and _rerank_rates_present(entry)
+
+
+def _rerank_price_is_declared(
+    model: str | None,
+    custom_llm_provider: str | None,
+    requested_model_info_override: ModelInfo | None = None,
+) -> bool:
+    if requested_model_info_override is not None:
+        return any(requested_model_info_override.get(field) is not None for field in _RERANK_RATE_FIELDS)
+    if model is None:
+        return False
+    prefixed: Final = (
+        ()
+        if custom_llm_provider is None or model.startswith(f"{custom_llm_provider}/")
+        else (f"{custom_llm_provider}/{model}",)
+    )
+    return any(_rerank_catalog_entry_declares_price(_raw_cost_map_entry(key)) for key in (model, *prefixed))
+
+
 def response_cost_calculator(
     response_object: ModelResponse
     | EmbeddingResponse
@@ -2535,75 +2568,82 @@ def response_cost_calculator(
     custom_cost_per_token: CostPerToken | None = None,
     custom_cost_per_second: float | None = None,
     requested_model_info_override: ModelInfo | None = None,
-) -> float:
+) -> float | None:
     """
     Returns
     - float or None: cost of response
     """
     try:
-        response_cost: float = 0.0
         if cache_hit is not None and cache_hit is True:
-            response_cost = 0.0
-        else:
-            if isinstance(response_object, BaseModel):
-                if hasattr(response_object, HIDDEN_PARAMS_ATTR):
-                    hidden_params: Final = cast(  # cast-ok: cost metadata supports dict and Pydantic storage
-                        dict[str, object] | BaseModel,
-                        getattr(response_object, HIDDEN_PARAMS_ATTR),
-                    )
-                    provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
-                    if provider_response_cost is not None and not custom_pricing:
-                        if _breakdown_total(litellm_logging_obj) != provider_response_cost:
-                            header_priced_model: Final = select_model_name_for_cost_calc(
-                                model=model,
-                                completion_response=response_object,
-                                custom_llm_provider=custom_llm_provider,
-                                custom_pricing=custom_pricing,
-                                base_model=base_model,
-                                router_model_id=router_model_id,
-                                region_name=region_name,
-                            )
-                            header_input_cost, header_output_cost = split_reported_cost_by_cost_map_ratio(
-                                reported_total=provider_response_cost,
-                                model=header_priced_model or model,
-                                custom_llm_provider=pricing_provider or custom_llm_provider,
-                                usage=get_usage_object(response_object),
-                                call_type=call_type,
-                                service_tier=service_tier,
-                                data_residency=data_residency,
-                            )
-                            _store_cost_breakdown_in_logging_obj(
-                                litellm_logging_obj=litellm_logging_obj,
-                                prompt_tokens_cost_usd_dollar=header_input_cost,
-                                completion_tokens_cost_usd_dollar=header_output_cost,
-                                cost_for_built_in_tools_cost_usd_dollar=0.0,
-                                total_cost_usd_dollar=provider_response_cost,
-                                original_cost=provider_response_cost,
-                            )
-                        return provider_response_cost
+            return 0.0
+        if isinstance(response_object, BaseModel):
+            if hasattr(response_object, HIDDEN_PARAMS_ATTR):
+                hidden_params: Final = cast(  # cast-ok: cost metadata supports dict and Pydantic storage
+                    dict[str, object] | BaseModel,
+                    getattr(response_object, HIDDEN_PARAMS_ATTR),
+                )
+                provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
+                if provider_response_cost is not None and not custom_pricing:
+                    if _breakdown_total(litellm_logging_obj) != provider_response_cost:
+                        header_priced_model: Final = select_model_name_for_cost_calc(
+                            model=model,
+                            completion_response=response_object,
+                            custom_llm_provider=custom_llm_provider,
+                            custom_pricing=custom_pricing,
+                            base_model=base_model,
+                            router_model_id=router_model_id,
+                            region_name=region_name,
+                        )
+                        header_input_cost, header_output_cost = split_reported_cost_by_cost_map_ratio(
+                            reported_total=provider_response_cost,
+                            model=header_priced_model or model,
+                            custom_llm_provider=pricing_provider or custom_llm_provider,
+                            usage=get_usage_object(response_object),
+                            call_type=call_type,
+                            service_tier=service_tier,
+                            data_residency=data_residency,
+                        )
+                        _store_cost_breakdown_in_logging_obj(
+                            litellm_logging_obj=litellm_logging_obj,
+                            prompt_tokens_cost_usd_dollar=header_input_cost,
+                            completion_tokens_cost_usd_dollar=header_output_cost,
+                            cost_for_built_in_tools_cost_usd_dollar=0.0,
+                            total_cost_usd_dollar=provider_response_cost,
+                            original_cost=provider_response_cost,
+                        )
+                    return provider_response_cost
 
-            response_cost = completion_cost(
-                completion_response=response_object,
-                model=model,
-                call_type=call_type,
-                custom_llm_provider=custom_llm_provider,
-                optional_params=optional_params,
-                custom_pricing=custom_pricing,
-                base_model=base_model,
-                custom_cost_per_token=custom_cost_per_token,
-                requested_model_info_override=requested_model_info_override,
-                custom_cost_per_second=custom_cost_per_second,
-                prompt=prompt,
-                standard_built_in_tools_params=standard_built_in_tools_params,
-                litellm_model_name=litellm_model_name,
-                router_model_id=router_model_id,
-                litellm_logging_obj=litellm_logging_obj,
-                pricing_provider=pricing_provider,
-                service_tier=service_tier,
-                data_residency=data_residency,
-                vertex_location=vertex_location,
-                region_name=region_name,
-            )
+        response_cost: Final = completion_cost(
+            completion_response=response_object,
+            model=model,
+            call_type=call_type,
+            custom_llm_provider=custom_llm_provider,
+            optional_params=optional_params,
+            custom_pricing=custom_pricing,
+            base_model=base_model,
+            custom_cost_per_token=custom_cost_per_token,
+            requested_model_info_override=requested_model_info_override,
+            custom_cost_per_second=custom_cost_per_second,
+            prompt=prompt,
+            standard_built_in_tools_params=standard_built_in_tools_params,
+            litellm_model_name=litellm_model_name,
+            router_model_id=router_model_id,
+            litellm_logging_obj=litellm_logging_obj,
+            pricing_provider=pricing_provider,
+            service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
+            region_name=region_name,
+        )
+        if (
+            call_type in _RERANK_CALL_TYPES
+            and response_cost == 0.0
+            and custom_pricing is not True
+            and custom_cost_per_token is None
+            and custom_cost_per_second is None
+            and not _rerank_price_is_declared(model, custom_llm_provider, requested_model_info_override)
+        ):
+            return None
         return response_cost
     except Exception as e:
         raise e

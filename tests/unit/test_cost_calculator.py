@@ -1981,6 +1981,56 @@ def test_vertex_semantic_ranker_rerank_completion_cost_is_nonzero(
     assert cost == pytest.approx(3 * litellm.model_cost[model]["input_cost_per_query"])
 
 
+def test_response_cost_calculator_rerank_bills_provider_usage_cost(_local_model_cost_map: None) -> None:
+    response: Final = RerankResponse(
+        id="openrouter-rerank",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        usage={"search_units": 1, "cost": 0.001},
+    )
+    cost: Final = response_cost_calculator(
+        response_object=response,
+        model="openrouter/scaleway/cohere/rerank-v3.5",
+        custom_llm_provider="openrouter",
+        call_type="rerank",
+        optional_params={},
+    )
+    assert cost == pytest.approx(0.001)
+
+
+def test_response_cost_calculator_declared_free_rerank_stays_zero(_local_model_cost_map: None) -> None:
+    response: Final = RerankResponse(
+        id="nvidia-rerank",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta={"billed_units": {"total_tokens": 4}},
+    )
+    cost: Final = response_cost_calculator(
+        response_object=response,
+        model="nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
+        custom_llm_provider="nvidia_nim",
+        call_type="rerank",
+        optional_params={},
+    )
+    assert cost == 0.0
+
+
+def test_response_cost_calculator_unmapped_rerank_without_usage_cost_is_unmeasured(
+    _local_model_cost_map: None,
+) -> None:
+    response: Final = RerankResponse(
+        id="unmapped-rerank",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta={"billed_units": {"search_units": 1}},
+    )
+    cost: Final = response_cost_calculator(
+        response_object=response,
+        model="not-a-real-rerank-model-47796",
+        custom_llm_provider="openrouter",
+        call_type="rerank",
+        optional_params={},
+    )
+    assert cost is None
+
+
 def test_azure_realtime_cost_calculator(_local_model_cost_map):
 
     cost = handle_realtime_stream_cost_calculation(

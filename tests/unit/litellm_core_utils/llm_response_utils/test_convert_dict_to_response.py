@@ -2850,6 +2850,21 @@ class TestConvertToModelResponseObjectRerank:
         assert result.id == "rerank-123"
         assert result.results[0]["relevance_score"] == 0.9
 
+    def test_rerank_keeps_provider_usage_cost(self):
+        from litellm.types.utils import RerankResponse
+
+        result = convert_to_model_response_object(
+            response_object={
+                "id": "rerank-123",
+                "results": [{"index": 0, "relevance_score": 0.9}],
+                "usage": {"search_units": 1, "cost": 0.001},
+            },
+            model_response_object=None,
+            response_type="rerank",
+        )
+        assert isinstance(result, RerankResponse)
+        assert result.usage == {"search_units": 1, "cost": 0.001}
+
 class TestConvertToModelResponseObjectCompletion:
     def test_tool_calls_finish_reason_override(self):
         response_object = {

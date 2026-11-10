@@ -15,6 +15,7 @@ from pydantic import ConfigDict, TypeAdapter
 from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.rerank_api.rerank_utils import apply_rerank_provider_usage
 from litellm.types.rerank import (
     OptionalRerankParams,
     RerankBilledUnits,
@@ -137,11 +138,14 @@ class JinaAIRerankConfig(BaseRerankConfig):
         _tokens: Final = _TOKENS.validate_python(usage)
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        return RerankResponse(
-            id=_STR.validate_python(_json_response.get("id") or str(uuid.uuid4())),
-            results=transformed_results,
-            meta=rerank_meta,
-        )  # Return response
+        return apply_rerank_provider_usage(
+            RerankResponse(
+                id=_STR.validate_python(_json_response.get("id") or str(uuid.uuid4())),
+                results=transformed_results,
+                meta=rerank_meta,
+            ),
+            _json_response,
+        )
 
     def validate_environment(
         self,

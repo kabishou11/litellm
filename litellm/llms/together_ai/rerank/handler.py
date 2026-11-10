@@ -15,6 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
 )
 from litellm.llms.together_ai.rerank.transformation import TogetherAIRerankConfig
+from litellm.rerank_api.rerank_utils import apply_rerank_provider_usage
 from litellm.types.rerank import RerankRequest, RerankResponse
 
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
@@ -72,7 +73,11 @@ class TogetherAIRerank(BaseLLM):
 
         _json_response: Final = _JSON_DICT.validate_python(response.json())
 
-        return TogetherAIRerankConfig().transform_response(_json_response)
+        return apply_rerank_provider_usage(
+            TogetherAIRerankConfig().transform_response(_json_response),
+            _json_response,
+            litellm.LlmProviders.TOGETHER_AI.value,
+        )
 
     async def async_rerank(  # New async method
         self,
@@ -97,4 +102,8 @@ class TogetherAIRerank(BaseLLM):
 
         _json_response: Final = _JSON_DICT.validate_python(response.json())
 
-        return TogetherAIRerankConfig().transform_response(_json_response)
+        return apply_rerank_provider_usage(
+            TogetherAIRerankConfig().transform_response(_json_response),
+            _json_response,
+            litellm.LlmProviders.TOGETHER_AI.value,
+        )

@@ -1,6 +1,19 @@
+from collections.abc import Mapping
 from typing import Final
 
+import httpx
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    finite_cost,
+    provider_reported_usage_cost,
+    set_response_cost_in_hidden_params,
+)
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.types.rerank import RerankResponse, RerankResponseUsage
+
+_RERANK_RESPONSE_USAGE: Final = TypeAdapter(RerankResponseUsage)
 
 
 def get_optional_rerank_params(
@@ -50,3 +63,44 @@ def get_optional_rerank_params(
         instruction=instruction,
         non_default_params=all_non_default_params,
     )
+
+
+def rerank_response_usage(body: Mapping[str, object]) -> RerankResponseUsage | None:
+    raw: Final = as_str_mapping(body.get("usage"))
+    if raw is None:
+        return None
+    try:
+        parsed: Final = _RERANK_RESPONSE_USAGE.validate_python(raw)
+    except ValidationError:
+        return None
+    cost: Final = parsed.get("cost")
+    if isinstance(cost, float) and finite_cost(cost) is None:
+        return _RERANK_RESPONSE_USAGE.validate_python({field: value for field, value in raw.items() if field != "cost"})
+    return parsed
+
+
+def apply_rerank_provider_usage(
+    response: RerankResponse,
+    provider_body: Mapping[str, object],
+    custom_llm_provider: str | None = None,
+) -> RerankResponse:
+    usage: Final = rerank_response_usage(provider_body)
+    if usage is None:
+        billed: Final = response.usage
+        if billed is not None:
+            set_response_cost_in_hidden_params(response, provider_reported_usage_cost(billed, custom_llm_provider))
+        return response
+    stamped: Final = response.model_copy(update={"usage": usage})
+    set_response_cost_in_hidden_params(stamped, provider_reported_usage_cost(usage, custom_llm_provider))
+    return stamped
+
+
+def apply_rerank_provider_usage_from_httpx(
+    response: RerankResponse,
+    raw_response: httpx.Response,
+    custom_llm_provider: str | None = None,
+) -> RerankResponse:
+    body: Final = as_str_mapping(raw_response.json())
+    if body is None:
+        return response
+    return apply_rerank_provider_usage(response, body, custom_llm_provider)

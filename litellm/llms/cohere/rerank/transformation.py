@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.rerank_api.rerank_utils import apply_rerank_provider_usage
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import OptionalRerankParams, RerankRequest, RerankResponse
 
@@ -149,7 +150,8 @@ class CohereRerankConfig(BaseRerankConfig):
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
-        return RerankResponse.model_validate(_JSON_OBJECT.validate_python(raw_response_json))
+        body: Final = _JSON_OBJECT.validate_python(raw_response_json)
+        return apply_rerank_provider_usage(RerankResponse.model_validate(body), body)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CohereError(message=error_message, status_code=status_code)

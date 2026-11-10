@@ -7,7 +7,7 @@ https://docs.cohere.com/reference/rerank
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, overload
 
-from pydantic import ConfigDict, PrivateAttr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, PrivateAttr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -78,6 +78,20 @@ class RerankUsage(TypedDict):
     total_tokens: ReadOnly[int]
 
 
+class RerankResponseUsage(TypedDict, total=False, extra_items=object):
+    search_units: ReadOnly[int | None]
+    total_tokens: ReadOnly[int | None]
+    input_tokens: ReadOnly[int | None]
+    output_tokens: ReadOnly[int | None]
+    prompt_tokens: ReadOnly[int | None]
+    completion_tokens: ReadOnly[int | None]
+    cost: ReadOnly[int | float | Mapping[str, object] | None]
+
+
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 _RERANK_META: Final = TypeAdapter(RerankResponseMeta)
 
 
@@ -122,6 +136,7 @@ class RerankResponse(LiteLLMBaseModel):
     id: str | None = None
     results: list[RerankResponseResult] | None = None  # Contains index and relevance_score
     meta: RerankResponseMeta | None = None  # Contains api_version and billed_units
+    usage: RerankResponseUsage | None = Field(default=None, exclude_if=_is_none)
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
@@ -144,9 +159,16 @@ class RerankResponse(LiteLLMBaseModel):
     def __getitem__(self, key: Literal["meta"]) -> RerankResponseMeta | None: ...
 
     @overload
-    def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None: ...
+    def __getitem__(self, key: Literal["usage"]) -> RerankResponseUsage | None: ...
 
-    def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None:
+    @overload
+    def __getitem__(
+        self, key: str
+    ) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | RerankResponseUsage | None: ...
+
+    def __getitem__(
+        self, key: str
+    ) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | RerankResponseUsage | None:
         return self.__dict__[key]
 
     @overload
@@ -157,6 +179,9 @@ class RerankResponse(LiteLLMBaseModel):
 
     @overload
     def get(self, key: Literal["meta"], default: None = None) -> RerankResponseMeta | None: ...
+
+    @overload
+    def get(self, key: Literal["usage"], default: None = None) -> RerankResponseUsage | None: ...
 
     @overload
     def get(self, key: str, default: object = None) -> object: ...

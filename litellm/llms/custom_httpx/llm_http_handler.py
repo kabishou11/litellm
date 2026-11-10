@@ -135,6 +135,7 @@ from litellm.llms.custom_httpx.http_handler import (
     header_value,
 )
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
+from litellm.rerank_api.rerank_utils import apply_rerank_provider_usage_from_httpx
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -1647,13 +1648,17 @@ class BaseLLMHTTPHandler:
                 provider_config=provider_config,
             )
 
-        return provider_config.transform_rerank_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            request_data=data,
+        return apply_rerank_provider_usage_from_httpx(
+            provider_config.transform_rerank_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                request_data=data,
+            ),
+            response,
+            custom_llm_provider,
         )
 
     async def arerank(
@@ -1685,13 +1690,17 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return provider_config.transform_rerank_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            request_data=request_data,
+        return apply_rerank_provider_usage_from_httpx(
+            provider_config.transform_rerank_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                request_data=request_data,
+            ),
+            response,
+            custom_llm_provider,
         )
 
     def _prepare_decisions_request(

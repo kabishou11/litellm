@@ -13,6 +13,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.rerank_api.rerank_utils import apply_rerank_provider_usage
 from litellm.types.llms.bedrock import BedrockPreparedRequest
 from litellm.types.rerank import RerankRequest
 from litellm.types.utils import RerankResponse
@@ -59,7 +60,10 @@ class BedrockRerankHandler(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return BedrockRerankConfig().transform_response(_JSON_DICT.validate_python(response.json()))
+        body: Final = _JSON_DICT.validate_python(response.json())
+        return apply_rerank_provider_usage(
+            BedrockRerankConfig().transform_response(body), body, litellm.LlmProviders.BEDROCK.value
+        )
 
     def rerank(
         self,
@@ -142,7 +146,11 @@ class BedrockRerankHandler(BaseAWSLLM):
 
         response_json: Final = _JSON_DICT.validate_python(response.json())
 
-        return BedrockRerankConfig().transform_response(response_json)
+        return apply_rerank_provider_usage(
+            BedrockRerankConfig().transform_response(response_json),
+            response_json,
+            litellm.LlmProviders.BEDROCK.value,
+        )
 
     def _prepare_request(
         self,

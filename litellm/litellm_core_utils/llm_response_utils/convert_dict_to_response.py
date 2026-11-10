@@ -1052,18 +1052,21 @@ def convert_to_model_response_object(
             if response_object is None:
                 raise Exception("Error in response object format")
 
+            parsed: Final[RerankResponse] = RerankResponse.model_validate(response_object)
             if model_response_object is None:
-                model_response_object = RerankResponse(**response_object)
-                return model_response_object
+                return parsed
 
             if "id" in response_object:
-                model_response_object.id = response_object["id"]
+                model_response_object.id = parsed.id
 
             if "meta" in response_object:
-                model_response_object.meta = response_object["meta"]
+                model_response_object.meta = parsed.meta
 
             if "results" in response_object:
-                model_response_object.results = response_object["results"]
+                model_response_object.results = parsed.results
+
+            if "usage" in response_object:
+                model_response_object.usage = parsed.usage
 
             return model_response_object
     except Exception as e:

@@ -16,3 +16,14 @@ def test_rerank_response_keeps_result_order_and_null_meta_fields() -> None:
     }
 
     assert RerankResponse(**payload).model_dump() == payload
+
+
+def test_rerank_response_dump_keeps_provider_usage_cost() -> None:
+    payload: Final = {
+        "id": "rerank-1",
+        "results": [{"index": 0, "relevance_score": 0.5}],
+        "meta": None,
+        "usage": {"search_units": 1, "cost": 0.001},
+    }
+
+    assert RerankResponse(**payload).model_dump() == payload

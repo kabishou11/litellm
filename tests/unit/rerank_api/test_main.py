@@ -140,6 +140,23 @@ def test_together_rerank_defaults_to_together_ai_host(respx_mock: respx.MockRout
     assert response.results[0]["relevance_score"] == 0.95
 
 
+def test_together_rerank_keeps_provider_usage_cost(respx_mock: respx.MockRouter, monkeypatch):
+    monkeypatch.delenv("TOGETHER_AI_API_BASE", raising=False)
+    body = {**TOGETHER_RERANK_BODY, "usage": {"prompt_tokens": 10, "total_tokens": 10, "cost": 0.001}}
+    mock_route = respx_mock.post("https://api.together.ai/v1/rerank")
+    mock_route.return_value = httpx.Response(200, json=body)
+
+    response = litellm.rerank(
+        model="together_ai/mixedbread-ai/mxbai-rerank-large-v2",
+        query=MARKER_QUERY,
+        documents=[MARKER_DOC],
+        api_key="fake-together-key",
+    )
+
+    assert response.usage["cost"] == pytest.approx(0.001)
+    assert response._hidden_params["response_cost"] == pytest.approx(0.001)
+
+
 def test_together_rerank_honors_api_base(respx_mock: respx.MockRouter):
     """Regression: a custom api_base was silently ignored by the Together rerank handler."""
     mock_route = respx_mock.post("https://custom-together.example/v1/rerank")

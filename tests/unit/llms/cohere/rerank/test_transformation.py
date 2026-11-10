@@ -6,6 +6,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from litellm.cost_calculator import response_cost_calculator
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.types.rerank import RerankResponse
@@ -35,6 +36,25 @@ def test_transform_rerank_response_keeps_the_cohere_payload():
         "results": [{"index": 1, "relevance_score": 0.9, "document": {"text": "sensitive-document"}}],
         "meta": {"billed_units": {"search_units": 1}, "tokens": {"input_tokens": 4}},
     }
+
+
+def test_transform_rerank_response_keeps_provider_usage_cost() -> None:
+    response: Final = _transform(
+        {
+            "id": "rerank-1",
+            "results": [{"index": 0, "relevance_score": 0.9}],
+            "usage": {"search_units": 1, "cost": 0.001},
+        }
+    )
+
+    assert response.usage == {"search_units": 1, "cost": 0.001}
+    assert response_cost_calculator(
+        response_object=response,
+        model="openrouter/scaleway/cohere/rerank-v3.5",
+        custom_llm_provider="openrouter",
+        call_type="rerank",
+        optional_params={},
+    ) == pytest.approx(0.001)
 
 
 def test_transform_rerank_response_of_an_empty_object_has_no_results():

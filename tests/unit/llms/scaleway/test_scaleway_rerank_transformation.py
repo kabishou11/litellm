@@ -55,6 +55,29 @@ def test_scaleway_rerank_posts_to_the_documented_endpoint(respx_mock: respx.Mock
     assert response.results[0]["document"]["text"].startswith("Oceans")
     assert response.id == SCALEWAY_RERANK_BODY["id"]
     assert response.meta["billed_units"]["total_tokens"] == 99
+    assert response.usage["total_tokens"] == 99
+
+
+def test_scaleway_rerank_keeps_provider_usage_cost(respx_mock: respx.MockRouter, monkeypatch):
+    monkeypatch.delenv("SCALEWAY_API_BASE", raising=False)
+    body = {
+        **SCALEWAY_RERANK_BODY,
+        "usage": {"search_units": 1, "total_tokens": 99, "cost": 0.001},
+    }
+    route = respx_mock.post("https://api.scaleway.ai/v1/rerank")
+    route.return_value = httpx.Response(200, json=body)
+
+    response = litellm.rerank(
+        model="scaleway/qwen3-embedding-8b",
+        query="What is the biggest area of water on earth ?",
+        documents=DOCUMENTS,
+        top_n=2,
+        api_key="scw-key",
+    )
+
+    assert response.usage["cost"] == pytest.approx(0.001)
+    assert response.usage["search_units"] == 1
+    assert response._hidden_params["response_cost"] == pytest.approx(0.001)
 
 
 def test_scaleway_rerank_reads_the_key_from_scw_secret_key(respx_mock: respx.MockRouter, monkeypatch):

@@ -4,6 +4,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from litellm.cost_calculator import response_cost_calculator
 from litellm.llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from litellm.types.rerank import RerankResponse
 
@@ -37,6 +38,26 @@ def test_transform_rerank_response_maps_results_and_usage():
         {"index": 2, "relevance_score": 0.0},
     ]
     assert response.meta == {"billed_units": {"total_tokens": 21}, "tokens": {}}
+    assert response.usage == {"total_tokens": 21, "prompt_tokens": 21}
+
+
+def test_transform_rerank_response_keeps_provider_usage_cost():
+    response = _transform(
+        {
+            "id": "rerank-1",
+            "results": [{"index": 0, "relevance_score": 0.5}],
+            "usage": {"search_units": 1, "cost": 0.001},
+        }
+    )
+
+    assert response.usage == {"search_units": 1, "cost": 0.001}
+    assert response_cost_calculator(
+        response_object=response,
+        model="jina_ai/jina-reranker-v2-base-multilingual",
+        custom_llm_provider="jina_ai",
+        call_type="rerank",
+        optional_params={},
+    ) == pytest.approx(0.001)
 
 
 @pytest.mark.parametrize(
