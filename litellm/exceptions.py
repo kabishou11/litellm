@@ -699,8 +699,9 @@ class RejectedRequestError(BadRequestError):
         message,
         model,
         llm_provider,
-        request_data: dict,
+        request_data: dict[str, object],
         litellm_debug_info: str | None = None,
+        rejected_by_hook: str | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.RejectedRequestError: {message}"
@@ -708,6 +709,13 @@ class RejectedRequestError(BadRequestError):
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
         self.request_data = request_data
+        hook: Final = rejected_by_hook or "pre_call_hook"
+        self.rejected_by_hook = hook
+        existing_metadata: Final[object | None] = request_data.get("metadata")
+        if isinstance(existing_metadata, dict):
+            existing_metadata["rejected_by_hook"] = hook
+        else:
+            request_data["metadata"] = {"rejected_by_hook": hook}  # rebind-ok: logs read this live request
         request: Final = httpx.Request(method="POST", url="https://api.openai.com/v1")
         response: Final = httpx.Response(status_code=400, request=request)
         super().__init__(

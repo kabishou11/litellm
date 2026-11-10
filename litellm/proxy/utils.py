@@ -2575,9 +2575,14 @@ class ProxyLogging:
                     model=data.get("model", ""),
                     llm_provider="",
                     request_data=data,
+                    rejected_by_hook="pre_call_hook",
                 )
             else:
-                raise HTTPException(status_code=400, detail={"error": response})
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": response, "rejected_by_hook": "pre_call_hook"},
+                    headers={"x-litellm-rejected-by-hook": "pre_call_hook"},
+                )
         return data
 
     def _should_use_guardrail_load_balancing(
