@@ -52,24 +52,36 @@ async def test_process_pre_call_hook_response_dict_returns_response(proxy_loggin
 
 
 @pytest.mark.asyncio
-async def test_process_pre_call_hook_response_string_completion_raises_rejected(proxy_logging):
-    with pytest.raises(RejectedRequestError):
+@pytest.mark.parametrize("call_type", ["completion", "text_completion"])
+async def test_process_pre_call_hook_response_string_completion_raises_rejected(proxy_logging, call_type):
+    data = {"model": "m", "metadata": {"user_api_key": "sk-test"}}
+    with pytest.raises(RejectedRequestError) as info:
         await proxy_logging.process_pre_call_hook_response(
             response="rejected",
-            data={"model": "m"},
-            call_type="completion",
+            data=data,
+            call_type=call_type,
         )
+    err = info.value
+    assert err.rejected_by_hook == "pre_call_hook"
+    assert err.request_data is data
+    assert data["metadata"] == {
+        "user_api_key": "sk-test",
+        "rejected_by_hook": "pre_call_hook",
+    }
 
 
 @pytest.mark.asyncio
-async def test_process_pre_call_hook_response_string_other_call_type_raises_http(proxy_logging):
+@pytest.mark.parametrize("call_type", ["embeddings", "acompletion", "aembedding"])
+async def test_process_pre_call_hook_response_string_other_call_type_raises_http(proxy_logging, call_type):
     with pytest.raises(HTTPException) as info:
         await proxy_logging.process_pre_call_hook_response(
             response="bad",
             data={},
-            call_type="embeddings",
+            call_type=call_type,
         )
     assert info.value.status_code == 400
+    assert info.value.detail == {"error": "bad", "rejected_by_hook": "pre_call_hook"}
+    assert info.value.headers == {"x-litellm-rejected-by-hook": "pre_call_hook"}
 
 
 @pytest.mark.asyncio
