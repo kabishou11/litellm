@@ -21,13 +21,16 @@ from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, Prisma
 
 import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 from litellm.models.credentials import CredentialItem
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
+    _callback_health_summary,
     _db_health_readiness_check,
     _show_no_redis_warning,
+    active_callbacks,
     get_callback_identifier,
     health_license_endpoint,
     health_services_endpoint,
@@ -2210,6 +2213,106 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     result = get_callback_identifier(my_callback_function)
     # Should fall back to callback_name() which returns __name__
     assert result == "my_callback_function"
+
+
+class _SilentCallbackLogger(CustomLogger):
+    pass
+
+
+class _PreCallCallbackLogger(CustomLogger):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        return None
+
+
+class _InheritedPreCallCallbackLogger(_PreCallCallbackLogger):
+    pass
+
+
+class _BarePreCallCallback:
+    async def async_pre_call_hook(self):
+        return None
+
+
+@pytest.mark.parametrize(
+    ("callback", "kind", "name", "is_custom", "implements_pre"),
+    (
+        ("langfuse", "string", "langfuse", False, False),
+        (_SilentCallbackLogger, "class", "_SilentCallbackLogger", True, False),
+        (_SilentCallbackLogger(), "instance", "_SilentCallbackLogger", True, False),
+        (_PreCallCallbackLogger, "class", "_PreCallCallbackLogger", True, True),
+        (_PreCallCallbackLogger(), "instance", "_PreCallCallbackLogger", True, True),
+        (CustomLogger, "class", "CustomLogger", False, False),
+        (CustomLogger(), "instance", "CustomLogger", True, False),
+        (_InheritedPreCallCallbackLogger(), "instance", "_InheritedPreCallCallbackLogger", True, False),
+        (_BarePreCallCallback(), "instance", "_BarePreCallCallback", False, True),
+        (object(), "instance", "object", False, False),
+    ),
+    ids=(
+        "string",
+        "silent-class",
+        "silent-instance",
+        "pre-call-class",
+        "pre-call-instance",
+        "base-class",
+        "base-instance",
+        "inherited-leaf",
+        "bare-hook",
+        "plain-object",
+    ),
+)
+def test_callback_health_summary_classifies_kind_and_leaf_pre_call_hook(
+    callback: object,
+    kind: str,
+    name: str,
+    is_custom: bool,
+    implements_pre: bool,
+) -> None:
+    summary: Final = _callback_health_summary(callback)
+    assert summary["kind"] == kind
+    assert summary["name"] == name
+    assert summary["is_custom_logger_subclass"] is is_custom
+    assert summary["implements_async_pre_call_hook"] is implements_pre
+    if kind == "string":
+        assert summary["repr"] == callback
+        assert summary["module"] is None
+        return
+    assert summary["repr"] == str(callback)
+    expected_module: Final = callback.__module__ if kind == "class" else type(callback).__module__
+    assert summary["module"] == expected_module
+
+
+@pytest.mark.asyncio
+async def test_active_callbacks_keeps_string_list_and_adds_matching_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger: Final = _PreCallCallbackLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger, "langfuse"])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_input_callback", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"alerting": None})
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", SimpleNamespace(alerting=None))
+
+    payload: Final = await active_callbacks()
+    listed: Final = payload["litellm.callbacks"]
+    details: Final = payload["litellm.callbacks_detail"]
+    assert listed == [str(logger), "langfuse"]
+    assert [row["repr"] for row in details] == listed
+    assert details[0]["kind"] == "instance"
+    assert details[0]["name"] == "_PreCallCallbackLogger"
+    assert details[0]["is_custom_logger_subclass"] is True
+    assert details[0]["implements_async_pre_call_hook"] is True
+    assert details[1] == {
+        "repr": "langfuse",
+        "kind": "string",
+        "name": "langfuse",
+        "module": None,
+        "is_custom_logger_subclass": False,
+        "implements_async_pre_call_hook": False,
+    }
 
 
 # ---------------------------------------------------------------------------

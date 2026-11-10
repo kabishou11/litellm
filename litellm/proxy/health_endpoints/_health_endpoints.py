@@ -21,6 +21,7 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS, PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.ms_teams import (
     MS_TEAMS_ALERT_HEADERS,
     build_ms_teams_payload,
@@ -2013,6 +2014,51 @@ async def _db_health_readiness_check_unbounded() -> DBHealthCache:
         return db_health_cache
 
 
+class _CallbackHealthSummary(TypedDict):
+    repr: ReadOnly[str]
+    kind: ReadOnly[Literal["class", "instance", "string"]]
+    name: ReadOnly[str]
+    module: ReadOnly[str | None]
+    is_custom_logger_subclass: ReadOnly[bool]
+    implements_async_pre_call_hook: ReadOnly[bool]
+
+
+def _bound_callback_health_summary(
+    cls: type[object],
+    displayed: object,
+    kind: Literal["class", "instance"],
+) -> _CallbackHealthSummary:
+    is_custom_logger_subclass: Final = (
+        issubclass(cls, CustomLogger) and cls is not CustomLogger
+        if kind == "class"
+        else isinstance(displayed, CustomLogger)
+    )
+    return {
+        "repr": str(displayed),
+        "kind": kind,
+        "name": cls.__name__,
+        "module": cls.__module__,
+        "is_custom_logger_subclass": is_custom_logger_subclass,
+        "implements_async_pre_call_hook": cls is not CustomLogger and "async_pre_call_hook" in cls.__dict__,
+    }
+
+
+def _callback_health_summary(callback: object) -> _CallbackHealthSummary:
+    if isinstance(callback, str):
+        return {
+            "repr": callback,
+            "kind": "string",
+            "name": callback,
+            "module": None,
+            "is_custom_logger_subclass": False,
+            "implements_async_pre_call_hook": False,
+        }
+    if isinstance(callback, type):
+        return _bound_callback_health_summary(callback, displayed=callback, kind="class")
+    instance_cls: Final[type[object]] = type(callback)
+    return _bound_callback_health_summary(instance_cls, displayed=callback, kind="instance")
+
+
 @router.get(
     "/settings",
     tags=["health"],
@@ -2034,6 +2080,7 @@ async def active_callbacks():
     {
         "alerting": _alerting,
         "litellm.callbacks": litellm_callbacks,
+        "litellm.callbacks_detail": callback_details,
         "litellm.input_callback": litellm_input_callbacks,
         "litellm.failure_callback": litellm_failure_callbacks,
         "litellm.success_callback": litellm_success_callbacks,
@@ -2070,6 +2117,7 @@ async def active_callbacks():
         + litellm_async_failure_callbacks
         + litellm_async_input_callbacks
     )
+    callback_details: Final = [_callback_health_summary(x) for x in litellm.callbacks]
 
     alerting: Final = proxy_logging_obj.alerting
     _num_alerting = 0
@@ -2079,6 +2127,7 @@ async def active_callbacks():
     return {
         "alerting": _alerting,
         "litellm.callbacks": litellm_callbacks,
+        "litellm.callbacks_detail": callback_details,
         "litellm.input_callback": litellm_input_callbacks,
         "litellm.failure_callback": litellm_failure_callbacks,
         "litellm.success_callback": litellm_success_callbacks,
